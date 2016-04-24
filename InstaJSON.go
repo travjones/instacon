@@ -21,5 +21,5 @@ type InstaOembedResp struct {
 	AuthorURL       string      `json:"author_url"`
 	AuthorID        int         `json:"author_id"`
 	Type            string      `json:"type"`
-	ShortCode       string      `json:"short_code"`
+	Code            string      `json:"code"`
 }

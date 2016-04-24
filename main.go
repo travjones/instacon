@@ -3,35 +3,33 @@ package main
 import (
 	"encoding/json"
 	"fmt"
+	"io/ioutil"
 	"net/http"
-	"net/http/httputil"
 	"strings"
 	"sync"
 	"time"
 )
 
+// slice of InstaOembedReqs
+var ioreqs []InstaOembedReq
+
 // slice of InstaOembedResp
 var ioresps []InstaOembedResp
 
-// takes a URL, scrapes insta page, and returns a slice of requests formatted
-// for insta's open oembed API endpoint
-func getIWR(url string) []InstaOembedReq {
+// takes a URL and pointer to wg, scrapes insta page, and returns a slice of
+// requests formatted for insta's open oembed API endpoint
+func getIWR(url string, wg *sync.WaitGroup) {
 	// GET
 	resp, err := http.Get(url)
 	if err != nil {
 		panic(err)
 	}
-
 	defer resp.Body.Close()
 
-	// dump response and include body
-	dump, err := httputil.DumpResponse(resp, true)
-	if err != nil {
-		panic(err)
-	}
+	body, err := ioutil.ReadAll(resp.Body)
 
 	// convert dumped response body to string
-	respString := string(dump)
+	respString := string(body)
 
 	// split the string
 	shards := strings.Split(respString, "window._sharedData = ")
@@ -45,40 +43,39 @@ func getIWR(url string) []InstaOembedReq {
 		panic(err)
 	}
 
-	// slice of InstaOembedReqs
-	var ioreqs []InstaOembedReq
-
 	// for each piece of media add shortcode and url and then append to slice
-	for i := 0; i < 12; i++ {
+	for _, value := range iwr.EntryData.Profilepage[0].User.Media.Nodes {
 		var ior InstaOembedReq
-		ior.ShortCode = iwr.EntryData.Profilepage[0].User.Media.Nodes[i].Code
+		ior.ShortCode = value.Code
 		// omitting script -- make sure you pull it in on the page
 		ior.Url = "https://api.instagram.com/oembed/?url=http://instagr.am/p/" +
-			iwr.EntryData.Profilepage[0].User.Media.Nodes[i].Code +
-			"&omitscript=true"
+			value.Code + "&omitscript=true"
 		ioreqs = append(ioreqs, ior)
 	}
 
-	return ioreqs
+	fmt.Println(iwr.EntryData.Profilepage[0].User.Username, "ready!")
+
+	wg.Done()
+}
+
+func asyncGetIWR(urls []string) {
+	var wg sync.WaitGroup
+	for _, value := range urls {
+		wg.Add(1)
+		go getIWR(value, &wg)
+		wg.Wait()
+	}
 }
 
 // takes an InstaOembedReq and pointer to wg (for concurrency). hits insta
 // oembed api endpoint and appends response to ioresps slice
-func getOembed(ior InstaOembedReq, wg *sync.WaitGroup) {
+func getOembed(ioreq InstaOembedReq, wg *sync.WaitGroup) {
 	// new GET req using oembed URL
-	req, err := http.NewRequest("GET", ior.Url, nil)
+	resp, err := http.Get(ioreq.Url)
 	if err != nil {
 		panic(err)
 	}
-
-	client := &http.Client{}
-
-	// Do request and drop response in resp
-	resp, err := client.Do(req)
-	if err != nil {
-		panic(err)
-	}
-	defer resp.Body.Close() // close dat shit or leak memory
+	defer resp.Body.Close()
 
 	// fresh IOResp to hold each response
 	var ioresp InstaOembedResp
@@ -88,8 +85,8 @@ func getOembed(ior InstaOembedReq, wg *sync.WaitGroup) {
 		panic(err)
 	}
 
-	// add shortcode to ioresp
-	ioresp.ShortCode = ior.ShortCode
+	// add insta shortcode to ioresp data structure
+	ioresp.Code = ioreq.ShortCode
 
 	// append each response to the IOResps slice
 	ioresps = append(ioresps, ioresp)
@@ -98,15 +95,12 @@ func getOembed(ior InstaOembedReq, wg *sync.WaitGroup) {
 	wg.Done()
 }
 
-func asyncGetOembed(urls []string) {
-	for _, value := range urls {
-		ioreqs := getIWR(value)
-		var wg sync.WaitGroup
-		for _, value := range ioreqs {
-			wg.Add(1)
-			go getOembed(value, &wg)
-			wg.Wait()
-		}
+func asyncGetOembed() {
+	var wg sync.WaitGroup
+	for _, value := range ioreqs {
+		wg.Add(1)
+		go getOembed(value, &wg)
+		wg.Wait()
 	}
 }
 
@@ -116,9 +110,12 @@ func main() {
 		"http://instagram.com/shaqueefaog",
 		"http://instagram.com/theboardr"}
 
-	t0 := time.Now()
-	asyncGetOembed(urls)
+	t0 := time.Now() // temporary benchmarking
+	asyncGetIWR(urls)
 	t1 := time.Now()
-	fmt.Println(t1.Sub(t0))
+	asyncGetOembed()
+	t2 := time.Now()
+	fmt.Println("Finished getIWR: ", t1.Sub(t0))
+	fmt.Println("Finished getOembed: ", t2.Sub(t1))
 	fmt.Println(len(ioresps))
 }
